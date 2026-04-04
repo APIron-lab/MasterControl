@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mastercontrol"
+version = "0.1.0"
+description = "Mascon / Master Control - personal CLI console for WSL"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "OpenAI" }]
+dependencies = []
+
+[project.scripts]
+mascon = "mastercontrol.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mastercontrol*"]

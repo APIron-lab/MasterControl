@@ -1,0 +1,48 @@
+Metadata-Version: 2.4
+Name: mastercontrol
+Version: 0.1.0
+Summary: Mascon / Master Control - personal CLI console for WSL
+Author: OpenAI
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+
+# MasterControl (mascon)
+
+Minimal personal CLI console for WSL-oriented workflows.
+
+## Install
+
+```bash
+cd /path/to/mascon
+python3 -m pip install -e .
+```
+
+## First-time config
+
+```bash
+mkdir -p ~/.config/mascon
+cat > ~/.config/mascon/config.toml <<'TOML'
+profile = "apiron"
+mode = "work"
+workspace = "~/workspace"
+default_aws_profile = "dev"
+
+[jumps]
+workspace = "~/workspace"
+mastercontrol = "~/workspace/mastercontrol"
+sophia = "~/workspace/sophia-core"
+vault = "~/workspace/virtual-vault"
+TOML
+```
+
+## Usage
+
+```bash
+mascon start
+mascon repo check
+mascon repo ship -m "feat: add dashboard"
+mascon aws whoami
+mascon path win . --copy
+mascon open .
+mascon jump workspace
+```
