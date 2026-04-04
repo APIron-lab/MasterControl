@@ -1,2 +1,0 @@
-[console_scripts]
-mascon = mastercontrol.cli:main
