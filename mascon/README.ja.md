@@ -1,32 +1,33 @@
 # Master Control
 
-[日本語版 README](README.ja.md)
+[English README](README.md)
 
-`Master Control` is a WSL-first command center for personal development workflows.
+`Master Control` は、WSL を前提にした個人開発向けのコマンドセンターです。
 
-It gives you one CLI, `mascon`, for:
+CLI コマンド `mascon` ひとつで、次のような日常作業をまとめて扱えます。
 
-- workspace and repository visibility
-- AWS profile and auth checks
-- path conversion and Windows interop from WSL
-- task-first AI commands across Codex, Claude Code, and local LLMs
-- a lightweight daily-start dashboard
+- workspace と複数リポジトリの状態確認
+- AWS profile / AWS SSO の診断
+- WSL と Windows 間のパス変換
+- Windows Explorer やクリップボードとの連携
+- Codex / Claude Code / ローカル LLM を task-first に呼び出す AI 操作
+- 毎日の起点になる軽量ダッシュボード
 
-This is not a general-purpose shell replacement. It is a focused cockpit for people who live in WSL and want fast, repeatable commands for the things they do every day.
+これは汎用シェルの置き換えではありません。WSL 上で日常的に繰り返す開発操作を、速く・分かりやすく・まとめて扱うための実務寄り CLI です。
 
-## Who It Is For
+## こんな人向け
 
-`mascon` is built for developers who:
+`mascon` は次のような人を想定しています。
 
-- work primarily inside WSL
-- manage multiple repositories under one workspace
-- use AWS profiles or AWS SSO regularly
-- want quick access to Codex, Claude Code, or local models without switching tools
-- prefer a pragmatic CLI over a large IDE-centric workflow layer
+- 普段の開発環境が WSL 中心
+- `~/workspace` のような配下に複数の Git リポジトリを持っている
+- AWS CLI や AWS SSO を日常的に使う
+- Codex / Claude Code / Ollama を都度切り替えながら使いたい
+- IDE や巨大な統合基盤より、軽量で手元に馴染む CLI を好む
 
-## 30-Second Setup
+## 30秒で導入
 
-If `mascon` is installed as a package:
+パッケージとしてインストールする場合:
 
 ```bash
 pipx install mascon
@@ -36,7 +37,7 @@ mascon ai doctor
 mascon start
 ```
 
-If you are working from source:
+ソースから使う場合:
 
 ```bash
 cd /path/to/mascon
@@ -47,21 +48,23 @@ mascon ai doctor
 mascon start
 ```
 
-## What You Get
+## 主な機能
 
-### Environment Checks
+### 環境診断
 
-`mascon doctor` validates the basics of your daily environment:
+`mascon doctor` は、日常利用に必要な環境が整っているかをまとめて確認します。
 
-- Python and platform
-- config loading
-- workspace existence
-- Git presence and repo count
-- AWS CLI, configured profile, and auth state
-- Codex and WSL integration tools
-- jump path validity
+チェック例:
 
-Example:
+- Python と実行環境
+- config 読込
+- workspace の存在
+- Git の有無と repo 数
+- AWS CLI / AWS profile / AWS 認証状態
+- Codex や WSL 連携コマンドの有無
+- jump 設定の妥当性
+
+出力例:
 
 ```text
 Mascon doctor
@@ -85,17 +88,17 @@ Suggested actions:
   - Run `mascon aws login` to refresh AWS SSO.
 ```
 
-Machine-readable output:
+JSON 出力:
 
 ```bash
 mascon doctor --json
 ```
 
-### AI Commands
+### AI 操作
 
-`mascon ai` is task-first.
+`mascon ai` は provider-first ではなく task-first です。
 
-You start with what you want to do:
+「どのAIを使うか」より先に、「何をしたいか」から始められます。
 
 ```bash
 mascon ai review .
@@ -103,14 +106,14 @@ mascon ai explain mastercontrol/cli.py
 mascon ai plan "add ai compare command"
 ```
 
-If needed, you can override the provider:
+必要なら provider を明示できます。
 
 ```bash
 mascon ai review . --provider codex
 mascon ai run --provider claude "Review this repository structure"
 ```
 
-Current AI MVP commands:
+現時点の AI MVP コマンド:
 
 - `mascon ai doctor`
 - `mascon ai list`
@@ -119,7 +122,7 @@ Current AI MVP commands:
 - `mascon ai plan "<task>"`
 - `mascon ai run --provider <name> "<prompt>"`
 
-Example:
+`mascon ai doctor` の出力例:
 
 ```text
 Mascon AI doctor
@@ -136,15 +139,15 @@ Suggested actions:
   - Install or expose `ollama` in PATH.
 ```
 
-Machine-readable output:
+JSON 出力:
 
 ```bash
 mascon ai doctor --json
 ```
 
-### Repository Operations
+### リポジトリ操作
 
-Representative commands:
+代表的なコマンド:
 
 ```bash
 mascon repo check
@@ -155,7 +158,7 @@ mascon repo ship -m "feat: add dashboard"
 mascon repo ship -m "feat: add dashboard" --yes
 ```
 
-`repo ship` performs:
+`repo ship` は次をまとめて実行します。
 
 ```text
 git pull --rebase
@@ -164,15 +167,15 @@ git commit -m "..."
 git push
 ```
 
-Safety features:
+安全性のために:
 
-- `--dry-run` shows what would happen without changing anything
-- default execution shows branch and changed file count, then asks for confirmation
-- `--yes` skips the confirmation prompt
+- `--dry-run` で事前確認できる
+- 通常実行では branch と changed files を表示して確認を求める
+- `--yes` で確認をスキップできる
 
-### WSL Convenience
+### WSL 便利機能
 
-Daily-use helper commands:
+日常向けの補助コマンド:
 
 ```bash
 mascon path win . --copy
@@ -183,11 +186,11 @@ mascon aws whoami
 mascon aws login
 ```
 
-## AI Provider Config
+## AI Provider 設定
 
-`mascon ai` uses task-first defaults from `~/.config/mascon/config.toml`.
+`mascon ai` は `~/.config/mascon/config.toml` の AI 設定を使います。
 
-Minimal example:
+最小構成例:
 
 ```toml
 [ai]
@@ -216,22 +219,22 @@ model = "qwen3-coder"
 enabled = true
 ```
 
-Behavior:
+挙動:
 
-- `review`, `explain`, and `plan` prefer `ai.default_task_provider`
-- if a task-specific mapping is missing, `default_provider` is used
-- if a configured provider is missing, `fallback_provider` can be used
-- `mascon ai run --provider ...` bypasses task routing
+- `review` / `explain` / `plan` は `ai.default_task_provider` を優先
+- task ごとの設定がなければ `default_provider` を使う
+- 指定 provider が見つからない場合は `fallback_provider` を使える
+- `mascon ai run --provider ...` は task routing を通さずに直接実行する
 
-## Config
+## 設定
 
-Interactive setup is the default:
+初期設定は `mascon init` を推奨します。
 
 ```bash
 mascon init
 ```
 
-Manual config is also supported:
+手動設定も可能です。
 
 ```bash
 mkdir -p ~/.config/mascon
@@ -272,7 +275,7 @@ enabled = true
 TOML
 ```
 
-## Command Snapshot
+## コマンド一覧のイメージ
 
 ```bash
 mascon start
@@ -291,45 +294,45 @@ mascon open .
 mascon jump workspace
 ```
 
-## WSL Notes
+## WSL 前提について
 
-`Master Control` is designed primarily for WSL.
+`Master Control` は主に WSL を対象に設計されています。
 
-Some commands assume Windows interop is available:
+一部の機能は Windows 側との連携を前提としています。
 
-- `mascon open` expects `explorer.exe`
-- clipboard integration expects `clip.exe`
-- path conversion assumes WSL-style path translation
+- `mascon open` は `explorer.exe` を使う
+- クリップボード連携は `clip.exe` を使う
+- パス変換は WSL と Windows の相互変換を前提としている
 
-It can run outside WSL, but the intended experience is WSL-first.
+WSL 外でも一部は動作しますが、想定されている利用体験は WSL 上です。
 
-## What It Is Not
+## このツールが目指していないこと
 
-- not a full Git abstraction layer
-- not a general-purpose agent orchestration platform
-- not a replacement for your shell, editor, or CI system
-- not trying to normalize every provider-specific AI feature behind one heavy interface
+- Git の完全な抽象化
+- 巨大なマルチエージェント基盤
+- シェルやエディタや CI の置き換え
+- すべての AI provider 差異を重い抽象化で吸収すること
 
-The current AI layer is intentionally lightweight: task-first commands, provider override, and environment diagnostics first.
+今の AI 層は意図的に軽量です。まずは task-first の入口、provider override、診断機能を整えることを優先しています。
 
-## Development
+## 開発
 
-Run tests:
+テスト:
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-Run syntax checks:
+構文チェック:
 
 ```bash
 python3 -m py_compile mastercontrol/config.py mastercontrol/services.py mastercontrol/ai.py mastercontrol/cli.py
 ```
 
-## Requirements
+## 要件
 
 - Python 3.11+
-- WSL recommended
-- Git for repo features
-- AWS CLI for AWS features
-- `codex`, `claude`, or `ollama` in `PATH` if you want AI provider support
+- WSL 推奨
+- Git: repo 機能に必要
+- AWS CLI: AWS 機能に必要
+- `codex`, `claude`, `ollama` のいずれか: AI provider 機能に必要
