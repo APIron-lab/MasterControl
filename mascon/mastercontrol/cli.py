@@ -358,6 +358,49 @@ def print_boot_checks(auto_login: bool = False) -> None:
     print()
 
 
+def dashboard_ai_status(config: MasconConfig) -> str:
+    count = len(config.ai.profiles)
+    if count == 0:
+        return "not configured"
+    default_text = f" (default: {config.ai.default_profile})" if config.ai.default_profile else ""
+    return f"{count} registered{default_text}"
+
+
+def dashboard_cloud_status(config: MasconConfig) -> str:
+    if not which("aws"):
+        return "AWS CLI not installed"
+    profiles = aws_list_profiles()
+    if config.default_aws_profile not in profiles:
+        return "not configured"
+    aws_status = aws_check_status(config.default_aws_profile)
+    if aws_status.ok:
+        return f"ready ({config.default_aws_profile})"
+    if aws_requires_login(aws_status):
+        return f"login required ({config.default_aws_profile})"
+    return f"configured, {aws_reason_label(aws_status.reason)}"
+
+
+def dashboard_suggested_actions(config: MasconConfig) -> list[str]:
+    actions: list[str] = []
+    if not config.ai.profiles:
+        actions.append("mascon ai register")
+
+    if not which("aws"):
+        actions.append("install AWS CLI")
+    else:
+        profiles = aws_list_profiles()
+        if config.default_aws_profile in profiles:
+            aws_status = aws_check_status(config.default_aws_profile)
+            if aws_requires_login(aws_status):
+                actions.append("mascon aws login")
+        else:
+            actions.append("aws configure list-profiles")
+
+    if len(config.jumps) <= 1:
+        actions.append(f"edit {CONFIG_FILE} to add more jumps")
+    return actions[:3]
+
+
 def show_dashboard() -> None:
     config = load_config()
     workspace = config.workspace_path
@@ -378,6 +421,17 @@ def show_dashboard() -> None:
                 f"branch={repo.branch:<20} changed={repo.changed_files:<3} "
                 f"ahead={repo.ahead:<2} behind={repo.behind:<2}"
             )
+    print("─" * 72)
+    print("Environment")
+    print(f"  AI profiles : {dashboard_ai_status(config)}")
+    print(f"  Cloud auth  : {dashboard_cloud_status(config)}")
+    print(f"  Jumps       : {len(config.jumps)} configured")
+    actions = dashboard_suggested_actions(config)
+    if actions:
+        print()
+        print("Suggested actions")
+        for action in actions:
+            print(f"  - {action}")
     print("─" * 72)
     print(f"Dirty repos: {len(dirty)} | Codex: {'ready' if codex_available() else 'missing'}")
     print("Type 'help' for interactive commands, 'exit' to leave.")
@@ -451,15 +505,6 @@ def build_init_config() -> tuple[MasconConfig, Path | None]:
     mode = prompt_text("Mode", "work")
     workspace = maybe_create_workspace(prompt_text("Workspace", "~/workspace"))
 
-    aws_profiles = aws_list_profiles()
-    default_aws_profile = "default"
-    if aws_profiles:
-        print("Available AWS profiles:")
-        for name in aws_profiles:
-            print(f"  - {name}")
-        default_aws_profile = aws_profiles[0]
-    aws_profile = prompt_text("Default AWS profile", default_aws_profile)
-
     jumps: dict[str, str] = {"workspace": workspace}
     for name, suggested in {
         "mastercontrol": "~/workspace/mastercontrol",
@@ -475,7 +520,7 @@ def build_init_config() -> tuple[MasconConfig, Path | None]:
         profile=profile,
         mode=mode,
         workspace=workspace,
-        default_aws_profile=aws_profile,
+        default_aws_profile="default",
         jumps=jumps,
     )
     return config, backup_path
@@ -701,7 +746,10 @@ def cmd_init(_: argparse.Namespace) -> int:
         print(f"Wrote config: {CONFIG_FILE}")
         if backup_path is not None:
             print(f"Backup saved: {backup_path}")
-        print("Run `mascon doctor` to validate this environment.")
+        print("Next steps:")
+        print("  - Run `mascon doctor` to validate this environment.")
+        print("  - Run `mascon ai register` when you want to add local AI profiles.")
+        print("  - Run `mascon aws login` when you want to enable AWS access.")
         return 0
     except (KeyboardInterrupt, EOFError):
         print()
@@ -997,11 +1045,16 @@ def interactive_loop() -> None:
             if raw in {"exit", "quit"}:
                 return
             if raw == "help":
-                print(
-                    "Commands: init | doctor | ai doctor | ai list | ai register | ai use <name> | ai chat [-p name] | "
-                    "ai review . | repo check | repo dirty | aws whoami | aws login | path win . | open . | jump <name> | "
-                    "codex | codex ask \"...\" | exit"
-                )
+                print("Core")
+                print("  init | doctor | start | help | exit")
+                print("AI")
+                print("  ai doctor | ai list | ai register | ai use <name> | ai run | ai chat [-p name] | ai review .")
+                print("Cloud / AWS")
+                print("  aws whoami | aws login | aws summary | aws profile")
+                print("Workspace")
+                print("  repo check | repo dirty | repo scan | jump <name> | open . | path win . | path wsl .")
+                print("Tools")
+                print('  codex | codex ask "..."')
                 continue
             argv = repl_expand_bare_command(raw)
             try:

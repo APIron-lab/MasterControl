@@ -24,6 +24,7 @@ from mastercontrol.cli import (
     maybe_record_repl_history,
     repl_expand_bare_command,
     repl_completion_candidates,
+    show_dashboard,
 )
 from mastercontrol.config import AiConfig, AiProfileConfig, MasconConfig
 from mastercontrol.services import AwsStatus, RepoState
@@ -144,7 +145,6 @@ class InitTests(unittest.TestCase):
                 "default",
                 "work",
                 "~/workspace",
-                "dev",
                 "",
                 "",
                 "",
@@ -156,13 +156,13 @@ class InitTests(unittest.TestCase):
             patch("builtins.input", side_effect=lambda prompt="": next(inputs)),
             patch("mastercontrol.cli.config_exists", return_value=True),
             patch("mastercontrol.cli.backup_existing_config", return_value=Path("/tmp/config.toml.bak")),
-            patch("mastercontrol.cli.aws_list_profiles", return_value=[]),
             patch("mastercontrol.cli.maybe_create_workspace", return_value="~/workspace"),
         ):
             config, backup_path = build_init_config()
 
         self.assertEqual(config.profile, "default")
         self.assertEqual(config.jumps, {"workspace": "~/workspace"})
+        self.assertEqual(config.default_aws_profile, "default")
         self.assertEqual(backup_path, Path("/tmp/config.toml.bak"))
 
 
@@ -246,6 +246,28 @@ class StartupIntroTests(unittest.TestCase):
         boot_mock.assert_called_once_with(auto_login=False)
         dashboard_mock.assert_called_once()
         loop_mock.assert_called_once()
+
+    def test_show_dashboard_prints_environment_and_suggestions(self) -> None:
+        config = MasconConfig(profile="default", mode="work", workspace="~/workspace", jumps={"workspace": "~/workspace"})
+        config.ai = AiConfig(profiles={}, default_profile="")
+        stdout = io.StringIO()
+
+        with (
+            patch("mastercontrol.cli.load_config", return_value=config),
+            patch("mastercontrol.cli.scan_repos", return_value=[]),
+            patch("mastercontrol.cli.codex_available", return_value=True),
+            patch("mastercontrol.cli.which", side_effect=lambda cmd: cmd == "aws"),
+            patch("mastercontrol.cli.aws_list_profiles", return_value=[]),
+            redirect_stdout(stdout),
+        ):
+            show_dashboard()
+
+        output = stdout.getvalue()
+        self.assertIn("Environment", output)
+        self.assertIn("AI profiles : not configured", output)
+        self.assertIn("Cloud auth  : not configured", output)
+        self.assertIn("Suggested actions", output)
+        self.assertIn("mascon ai register", output)
 
 
 class ReplTests(unittest.TestCase):
