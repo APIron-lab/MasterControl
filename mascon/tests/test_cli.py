@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from mastercontrol import __version__
 from mastercontrol.cli import (
     TITLE_TEXT,
     animations_enabled,
@@ -205,12 +206,12 @@ class RepoShipTests(unittest.TestCase):
 
 class StartupIntroTests(unittest.TestCase):
     def test_get_mascon_version_returns_package_version(self) -> None:
-        self.assertEqual(get_mascon_version(), "0.1.0")
+        self.assertEqual(get_mascon_version(), __version__)
 
     def test_build_version_line_contains_title_and_version(self) -> None:
-        line = build_version_line("0.1.0", 80)
+        line = build_version_line(__version__, 80)
         self.assertIn(TITLE_TEXT, line)
-        self.assertIn("Version 0.1.0", line)
+        self.assertIn(f"Version {__version__}", line)
 
     def test_animations_enabled_respects_no_anim_flag(self) -> None:
         with (
