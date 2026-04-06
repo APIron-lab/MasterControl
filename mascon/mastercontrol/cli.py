@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import argparse
 import os
 from pathlib import Path
@@ -10,15 +11,26 @@ import sys
 import time
 import tomllib
 
+try:
+    import readline
+except ImportError:  # pragma: no cover - readline is expected on WSL/Linux
+    readline = None
+
 from . import __version__ as package_version
 from .ai import (
+    build_chat_prompt,
     collect_ai_doctor,
+    detect_local_candidates,
+    profile_summary,
     provider_statuses,
+    resolve_profile,
     resolve_provider_name,
-    run_ai_prompt,
+    run_profile_prompt,
     run_ai_task,
+    slugify_profile_name,
 )
 from .config import (
+    AiProfileConfig,
     CONFIG_FILE,
     MasconConfig,
     backup_existing_config,
@@ -61,6 +73,7 @@ ASCII_LOGO = r"""
 """
 
 TITLE_TEXT = "M A S T E R   C O N T R O L"
+HISTORY_FILE = CONFIG_FILE.with_name("history")
 
 
 def print_banner() -> None:
@@ -86,6 +99,134 @@ def animations_enabled(args: argparse.Namespace) -> bool:
     if os.environ.get("TERM", "").lower() == "dumb":
         return False
     return True
+
+
+def repl_top_level_commands() -> list[str]:
+    return [
+        "help",
+        "exit",
+        "quit",
+        "start",
+        "doctor",
+        "repo",
+        "aws",
+        "ai",
+        "path",
+        "open",
+        "jump",
+        "codex",
+    ]
+
+
+def repl_ai_subcommands() -> list[str]:
+    return [
+        "doctor",
+        "list",
+        "register",
+        "use",
+        "run",
+        "chat",
+        "review",
+        "explain",
+        "plan",
+    ]
+
+
+def repl_profile_names() -> list[str]:
+    try:
+        return sorted(load_config().ai.profiles)
+    except Exception:
+        return []
+
+
+def repl_completion_candidates(line_buffer: str, text: str, begin_idx: int, end_idx: int) -> list[str]:
+    del end_idx
+    try:
+        tokens = shlex.split(line_buffer[:begin_idx])
+    except ValueError:
+        tokens = line_buffer[:begin_idx].split()
+    expect_new_token = line_buffer[:begin_idx].endswith(" ")
+
+    if not tokens:
+        return [cmd for cmd in repl_top_level_commands() if cmd.startswith(text)]
+
+    if len(tokens) == 1 and not expect_new_token:
+        return [cmd for cmd in repl_top_level_commands() if cmd.startswith(text)]
+
+    if tokens[0] != "ai":
+        return []
+
+    if len(tokens) == 1 and expect_new_token:
+        return [cmd for cmd in repl_ai_subcommands() if cmd.startswith(text)]
+
+    if len(tokens) == 2 and not expect_new_token:
+        return [cmd for cmd in repl_ai_subcommands() if cmd.startswith(text)]
+
+    if len(tokens) >= 2 and tokens[1] in {"use"}:
+        return [name for name in repl_profile_names() if name.startswith(text)]
+
+    if len(tokens) >= 2 and tokens[1] in {"run", "chat"}:
+        if tokens[-1] in {"-p", "--profile"} and expect_new_token:
+            return repl_profile_names()
+        if len(tokens) >= 3 and tokens[-2] in {"-p", "--profile"}:
+            return [name for name in repl_profile_names() if name.startswith(text)]
+        return [flag for flag in ["-p", "--profile"] if flag.startswith(text)]
+
+    return []
+
+
+def repl_completer(text: str, state: int) -> str | None:
+    if readline is None:
+        return None
+    buffer = readline.get_line_buffer()
+    begin_idx = readline.get_begidx()
+    end_idx = readline.get_endidx()
+    matches = repl_completion_candidates(buffer, text, begin_idx, end_idx)
+    if state < len(matches):
+        return matches[state]
+    return None
+
+
+def setup_repl_readline() -> None:
+    if readline is None:
+        return
+    ensure_config_dir()
+    readline.parse_and_bind("tab: complete")
+    readline.set_completer(repl_completer)
+    readline.set_completer_delims(" \t\n")
+    try:
+        if HISTORY_FILE.exists():
+            readline.read_history_file(str(HISTORY_FILE))
+    except OSError:
+        pass
+
+    atexit.register(write_repl_history)
+
+
+def write_repl_history() -> None:
+    if readline is None:
+        return
+    try:
+        readline.write_history_file(str(HISTORY_FILE))
+    except OSError:
+        pass
+
+
+def maybe_record_repl_history(raw: str, history_before: int) -> None:
+    if readline is None or not raw:
+        return
+    if readline.get_current_history_length() == history_before:
+        readline.add_history(raw)
+
+
+def repl_expand_bare_command(raw: str) -> list[str]:
+    try:
+        tokens = shlex.split(raw)
+    except ValueError:
+        return ["mascon", *raw.split()]
+    if len(tokens) == 1 and tokens[0] in {"ai", "repo", "aws", "path"}:
+        return ["mascon", tokens[0], "--help"]
+    return ["mascon", *tokens]
 
 
 def get_terminal_width(default: int = 80) -> int:
@@ -562,7 +703,7 @@ def cmd_init(_: argparse.Namespace) -> int:
             print(f"Backup saved: {backup_path}")
         print("Run `mascon doctor` to validate this environment.")
         return 0
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         print()
         print("Cancelled.")
         return 2
@@ -626,17 +767,12 @@ def cmd_ai_doctor(args: argparse.Namespace) -> int:
 
 def cmd_ai_list(_: argparse.Namespace) -> int:
     config = load_config()
-    statuses = provider_statuses(config.ai)
-    if not statuses:
-        print("No AI providers configured.")
+    if not config.ai.profiles:
+        print("No local AI profiles registered.")
+        print("Run `mascon ai register` to add a local model profile.")
         return 1
-    for status in statuses:
-        availability = "available" if status.available else "not found"
-        enabled = "enabled" if status.enabled else "disabled"
-        extra = f" command={status.command}"
-        if status.model:
-            extra += f" model={status.model}"
-        print(f"{status.name} | {status.type} | {enabled} | {availability}{extra}")
+    for name, profile in config.ai.profiles.items():
+        print(profile_summary(name, profile, is_default=name == config.ai.default_profile))
     return 0
 
 
@@ -665,15 +801,176 @@ def cmd_ai_plan(args: argparse.Namespace) -> int:
     return run_ai_and_print("plan", args.task, provider_name=args.provider)
 
 
-def cmd_ai_run(args: argparse.Namespace) -> int:
-    config = load_config()
-    response = run_ai_prompt(config, args.provider, args.prompt)
-    if response.ok:
-        if response.stdout:
-            print(response.stdout)
+def compact_home_path(path: Path) -> str:
+    home = Path.home().resolve()
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(home)
+        return str(Path("~") / relative)
+    except ValueError:
+        return str(resolved)
+
+
+def local_candidate_summary(index: int, runtime: object) -> str:
+    from .ai import LocalModelCandidate
+
+    candidate = runtime
+    assert isinstance(candidate, LocalModelCandidate)
+    target = candidate.model or compact_home_path(Path(candidate.model_path)) if candidate.model_path else candidate.model
+    detail = f" | {candidate.detail}" if candidate.detail else ""
+    availability = "ready" if candidate.available else "detected"
+    return f"[{index}] {candidate.runtime} | {target} | {availability}{detail}"
+
+
+def build_profile_from_candidate(candidate: object, label: str) -> AiProfileConfig:
+    from .ai import LocalModelCandidate
+
+    assert isinstance(candidate, LocalModelCandidate)
+    model_path = compact_home_path(Path(candidate.model_path)) if candidate.model_path else ""
+    return AiProfileConfig(
+        type=candidate.runtime,
+        label=label.strip(),
+        model=candidate.model,
+        model_path=model_path,
+        command=candidate.command,
+        base_url=candidate.base_url,
+    )
+
+
+def cmd_ai_register(_: argparse.Namespace) -> int:
+    try:
+        config = load_config()
+        candidates = detect_local_candidates()
+
+        print("Local LLM registration")
+        print()
+        if not candidates:
+            print("No local LLM candidates were detected.")
+            print("Checked: `ollama`, `llama-cli`, `llama-server`, `~/models`, `~/workspace/models`")
+            return 1
+
+        while True:
+            print("Detected candidates:")
+            for index, candidate in enumerate(candidates, start=1):
+                print(local_candidate_summary(index, candidate))
+            print()
+
+            choice = input("Select a candidate number to register [Enter to cancel]: ").strip()
+            if not choice:
+                return 2
+            if not choice.isdigit():
+                print("Please enter a valid number.")
+                continue
+
+            index = int(choice)
+            if index < 1 or index > len(candidates):
+                print("Please choose one of the listed candidates.")
+                continue
+
+            candidate = candidates[index - 1]
+            default_name_source = candidate.model or Path(candidate.model_path).stem or candidate.runtime
+            suggested_name = slugify_profile_name(default_name_source)
+            profile_name = input(f"Profile name [default: {suggested_name}]: ").strip() or suggested_name
+            profile_name = slugify_profile_name(profile_name)
+            label = input("Label / usage note [optional]: ").strip()
+
+            if profile_name in config.ai.profiles:
+                overwrite = prompt_yes_no(f"Profile `{profile_name}` already exists. Overwrite?", default_yes=False)
+                if not overwrite:
+                    print("Skipped.")
+                    if prompt_yes_no("Register another candidate?", default_yes=True):
+                        print()
+                        continue
+                    return 0
+
+            profile = build_profile_from_candidate(candidate, label)
+            config.ai.profiles[profile_name] = profile
+
+            default_yes = not config.ai.default_profile
+            if prompt_yes_no("Use this profile as default?", default_yes=default_yes):
+                config.ai.default_profile = profile_name
+            elif not config.ai.default_profile:
+                config.ai.default_profile = profile_name
+
+            save_config(config)
+            print()
+            print(f"Saved profile: {profile_name}")
+            print(profile_summary(profile_name, profile, is_default=profile_name == config.ai.default_profile))
+            print()
+
+            if not prompt_yes_no("Register another candidate?", default_yes=False):
+                return 0
+            print()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        print("Cancelled.")
+        return 2
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_ai_use(args: argparse.Namespace) -> int:
+    try:
+        config = load_config()
+        if args.name not in config.ai.profiles:
+            print(f"Unknown AI profile: {args.name}", file=sys.stderr)
+            return 1
+        config.ai.default_profile = args.name
+        save_config(config)
+        print(f"Default AI profile: {args.name}")
         return 0
-    print(response.stderr or response.stdout or f"{response.provider} command failed.", file=sys.stderr)
-    return 1
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_ai_run(args: argparse.Namespace) -> int:
+    try:
+        config = load_config()
+        response = run_profile_prompt(config, args.prompt, explicit_profile=args.profile)
+        if response.ok:
+            if response.stdout:
+                print(response.stdout)
+            return 0
+        print(response.stderr or response.stdout or f"{response.provider} command failed.", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_ai_chat(args: argparse.Namespace) -> int:
+    try:
+        config = load_config()
+        profile_name, _profile = resolve_profile(config, explicit_profile=args.profile)
+        print(f"Chat profile: {profile_name}")
+        print("Type `exit` or `quit` to leave.")
+        history: list[tuple[str, str]] = []
+
+        while True:
+            try:
+                message = input("you> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 0
+            if not message:
+                continue
+            if message.lower() in {"exit", "quit"}:
+                return 0
+
+            prompt = build_chat_prompt(history, message)
+            response = run_profile_prompt(config, prompt, explicit_profile=profile_name)
+            if not response.ok:
+                print(response.stderr or response.stdout or f"{response.provider} command failed.", file=sys.stderr)
+                return 1
+            answer = response.stdout.strip()
+            print(f"{profile_name}> {answer}")
+            history.append(("user", message))
+            history.append(("assistant", answer))
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -685,32 +982,39 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 
 def interactive_loop() -> None:
-    while True:
-        try:
-            raw = input("mascon> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-        if not raw:
-            continue
-        if raw in {"exit", "quit"}:
-            return
-        if raw == "help":
-            print(
-                "Commands: init | doctor | ai doctor | ai review . | repo check | repo dirty | aws whoami | aws login | "
-                "path win . | open . | jump <name> | codex | codex ask \"...\" | exit"
-            )
-            continue
-        argv = ["mascon", *shlex.split(raw)]
-        try:
-            code = run_cli(argv)
-            if code != 0:
-                print(f"Command exited with status {code}")
-        except SystemExit as exc:
-            if int(exc.code or 0) != 0:
-                print(f"Command exited with status {exc.code}")
-        except Exception as exc:
-            print(f"ERROR: {exc}")
+    setup_repl_readline()
+    try:
+        while True:
+            history_before = readline.get_current_history_length() if readline is not None else 0
+            try:
+                raw = input("mascon> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            if not raw:
+                continue
+            maybe_record_repl_history(raw, history_before)
+            if raw in {"exit", "quit"}:
+                return
+            if raw == "help":
+                print(
+                    "Commands: init | doctor | ai doctor | ai list | ai register | ai use <name> | ai chat [-p name] | "
+                    "ai review . | repo check | repo dirty | aws whoami | aws login | path win . | open . | jump <name> | "
+                    "codex | codex ask \"...\" | exit"
+                )
+                continue
+            argv = repl_expand_bare_command(raw)
+            try:
+                code = run_cli(argv)
+                if code != 0:
+                    print(f"Command exited with status {code}")
+            except SystemExit as exc:
+                if int(exc.code or 0) != 0:
+                    print(f"Command exited with status {exc.code}")
+            except Exception as exc:
+                print(f"ERROR: {exc}")
+    finally:
+        write_repl_history()
 
 
 def cmd_repo_check(_: argparse.Namespace) -> int:
@@ -865,8 +1169,15 @@ def build_parser() -> argparse.ArgumentParser:
     ai_doctor_p.add_argument("--quiet", action="store_true", help="Show WARN / FAIL only")
     ai_doctor_p.set_defaults(func=cmd_ai_doctor)
 
-    ai_list_p = ai_sub.add_parser("list", help="List configured AI providers")
+    ai_register_p = ai_sub.add_parser("register", help="Detect and register local LLM profiles")
+    ai_register_p.set_defaults(func=cmd_ai_register)
+
+    ai_list_p = ai_sub.add_parser("list", help="List registered local AI profiles")
     ai_list_p.set_defaults(func=cmd_ai_list)
+
+    ai_use_p = ai_sub.add_parser("use", help="Set the default local AI profile")
+    ai_use_p.add_argument("name", help="Registered profile name")
+    ai_use_p.set_defaults(func=cmd_ai_use)
 
     ai_review_p = ai_sub.add_parser("review", help="Ask an AI provider to review a path")
     ai_review_p.add_argument("path", nargs="?", default=".")
@@ -883,10 +1194,14 @@ def build_parser() -> argparse.ArgumentParser:
     ai_plan_p.add_argument("--provider", help="Override provider for this task")
     ai_plan_p.set_defaults(func=cmd_ai_plan)
 
-    ai_run_p = ai_sub.add_parser("run", help="Run a raw prompt against a specific provider")
-    ai_run_p.add_argument("--provider", required=True, help="Provider name")
+    ai_run_p = ai_sub.add_parser("run", help="Run a raw prompt against a registered local AI profile")
+    ai_run_p.add_argument("-p", "--profile", help="Registered profile name")
     ai_run_p.add_argument("prompt", help="Prompt to send")
     ai_run_p.set_defaults(func=cmd_ai_run)
+
+    ai_chat_p = ai_sub.add_parser("chat", help="Start a chat session with a registered local AI profile")
+    ai_chat_p.add_argument("-p", "--profile", help="Registered profile name")
+    ai_chat_p.set_defaults(func=cmd_ai_chat)
 
     start_p = sub.add_parser("start", help="Start Master Control dashboard")
     start_p.add_argument(

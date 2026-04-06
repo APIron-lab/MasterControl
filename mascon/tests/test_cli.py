@@ -20,8 +20,12 @@ from mastercontrol.cli import (
     cmd_start,
     collect_doctor_items,
     get_mascon_version,
+    interactive_loop,
+    maybe_record_repl_history,
+    repl_expand_bare_command,
+    repl_completion_candidates,
 )
-from mastercontrol.config import MasconConfig
+from mastercontrol.config import AiConfig, AiProfileConfig, MasconConfig
 from mastercontrol.services import AwsStatus, RepoState
 
 
@@ -242,6 +246,78 @@ class StartupIntroTests(unittest.TestCase):
         boot_mock.assert_called_once_with(auto_login=False)
         dashboard_mock.assert_called_once()
         loop_mock.assert_called_once()
+
+
+class ReplTests(unittest.TestCase):
+    def test_maybe_record_repl_history_skips_when_readline_already_added(self) -> None:
+        fake_readline = type(
+            "FakeReadline",
+            (),
+            {
+                "get_current_history_length": staticmethod(lambda: 3),
+                "add_history": staticmethod(lambda _value: (_ for _ in ()).throw(AssertionError("should not add"))),
+            },
+        )()
+        with patch("mastercontrol.cli.readline", fake_readline):
+            maybe_record_repl_history("help", 2)
+
+    def test_maybe_record_repl_history_adds_once_when_readline_did_not(self) -> None:
+        added: list[str] = []
+        fake_readline = type(
+            "FakeReadline",
+            (),
+            {
+                "get_current_history_length": staticmethod(lambda: 2),
+                "add_history": staticmethod(lambda value: added.append(value)),
+            },
+        )()
+        with patch("mastercontrol.cli.readline", fake_readline):
+            maybe_record_repl_history("help", 2)
+
+        self.assertEqual(added, ["help"])
+
+    def test_repl_completion_suggests_top_level_commands(self) -> None:
+        candidates = repl_completion_candidates("a", "a", 0, 1)
+        self.assertIn("ai", candidates)
+        self.assertIn("aws", candidates)
+
+    def test_repl_completion_suggests_ai_subcommands(self) -> None:
+        candidates = repl_completion_candidates("ai r", "r", 3, 4)
+        self.assertIn("register", candidates)
+        self.assertIn("review", candidates)
+        self.assertIn("run", candidates)
+
+    def test_repl_completion_suggests_profile_names(self) -> None:
+        config = MasconConfig()
+        config.ai = AiConfig(
+            profiles={
+                "sophia": AiProfileConfig(type="ollama", model="qwen2.5:7b"),
+                "coder": AiProfileConfig(type="llama.cpp", model_path="~/models/coder.gguf"),
+            }
+        )
+        with patch("mastercontrol.cli.load_config", return_value=config):
+            use_candidates = repl_completion_candidates("ai use s", "s", 7, 8)
+            chat_candidates = repl_completion_candidates("ai chat -p s", "s", 11, 12)
+
+        self.assertIn("sophia", use_candidates)
+        self.assertIn("sophia", chat_candidates)
+
+    def test_interactive_loop_dispatches_to_run_cli(self) -> None:
+        with (
+            patch("mastercontrol.cli.setup_repl_readline"),
+            patch("builtins.input", side_effect=["ai list", "exit"]),
+            patch("mastercontrol.cli.run_cli", return_value=0) as run_cli_mock,
+        ):
+            interactive_loop()
+
+        run_cli_mock.assert_called_once_with(["mascon", "ai", "list"])
+
+    def test_repl_expand_bare_command_routes_to_help(self) -> None:
+        self.assertEqual(repl_expand_bare_command("ai"), ["mascon", "ai", "--help"])
+        self.assertEqual(repl_expand_bare_command("repo"), ["mascon", "repo", "--help"])
+        self.assertEqual(repl_expand_bare_command("aws"), ["mascon", "aws", "--help"])
+        self.assertEqual(repl_expand_bare_command("path"), ["mascon", "path", "--help"])
+        self.assertEqual(repl_expand_bare_command("ai list"), ["mascon", "ai", "list"])
 
 
 if __name__ == "__main__":
