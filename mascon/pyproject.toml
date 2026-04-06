@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mastercontrol"
-version = "0.1.0"
+version = "0.1.1"
 description = "Mascon / Master Control - personal CLI console for WSL"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "OpenAI" }]
+authors = [{ name = "APIron Lab" }]
 dependencies = []
 
 [project.scripts]

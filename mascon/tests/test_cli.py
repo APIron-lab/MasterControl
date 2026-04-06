@@ -32,13 +32,13 @@ class DoctorTests(unittest.TestCase):
             valid_jump = workspace
             invalid_jump = Path(tmpdir) / "missing"
             config = MasconConfig(
-                profile="apiron",
+                profile="default",
                 mode="work",
                 workspace=str(workspace),
                 default_aws_profile="dev",
                 jumps={
                     "workspace": str(valid_jump),
-                    "vault": str(invalid_jump),
+                    "docs": str(invalid_jump),
                 },
             )
 
@@ -60,8 +60,8 @@ class DoctorTests(unittest.TestCase):
 
         jumps_item = next(item for item in items if item.key == "jumps")
         self.assertEqual(jumps_item.status, "warn")
-        self.assertIn("vault", jumps_item.detail)
-        self.assertIn("Missing jump paths: vault", suggestions)
+        self.assertIn("docs", jumps_item.detail)
+        self.assertIn("Missing jump paths: docs", suggestions)
 
     def test_cmd_doctor_json_output_has_expected_shape(self) -> None:
         fake_items = [
@@ -87,7 +87,7 @@ class DoctorTests(unittest.TestCase):
             workspace = Path(tmpdir) / "workspace"
             workspace.mkdir()
             config = MasconConfig(
-                profile="apiron",
+                profile="default",
                 mode="work",
                 workspace=str(workspace),
                 default_aws_profile="dev",
@@ -136,10 +136,11 @@ class InitTests(unittest.TestCase):
         inputs = iter(
             [
                 "b",
-                "apiron",
+                "default",
                 "work",
                 "~/workspace",
                 "dev",
+                "",
                 "",
                 "",
                 "",
@@ -155,7 +156,7 @@ class InitTests(unittest.TestCase):
         ):
             config, backup_path = build_init_config()
 
-        self.assertEqual(config.profile, "apiron")
+        self.assertEqual(config.profile, "default")
         self.assertEqual(config.jumps, {"workspace": "~/workspace"})
         self.assertEqual(backup_path, Path("/tmp/config.toml.bak"))
 
