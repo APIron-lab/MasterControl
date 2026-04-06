@@ -16,6 +16,7 @@ from mastercontrol.cli import (
     build_init_config,
     build_version_line,
     cmd_doctor,
+    cmd_jump,
     cmd_repo_ship,
     cmd_start,
     collect_doctor_items,
@@ -208,6 +209,89 @@ class RepoShipTests(unittest.TestCase):
         self.assertIn("push: ok", stdout.getvalue())
 
 
+class JumpTests(unittest.TestCase):
+    def test_cmd_jump_list_prints_configured_jumps(self) -> None:
+        config = MasconConfig(jumps={"workspace": "~/workspace", "docs": "~/workspace/docs"})
+        stdout = io.StringIO()
+        with (
+            patch("mastercontrol.cli.load_config", return_value=config),
+            redirect_stdout(stdout),
+        ):
+            code = cmd_jump(type("Args", (), {"jump_args": ["list"]})())
+
+        self.assertEqual(code, 0)
+        output = stdout.getvalue()
+        self.assertIn("workspace", output)
+        self.assertIn("~/workspace/docs", output)
+
+    def test_cmd_jump_add_saves_new_jump(self) -> None:
+        config = MasconConfig(jumps={"workspace": "~/workspace"})
+        stdout = io.StringIO()
+        with (
+            patch("mastercontrol.cli.load_config", return_value=config),
+            patch("mastercontrol.cli.save_config") as save_mock,
+            redirect_stdout(stdout),
+        ):
+            code = cmd_jump(type("Args", (), {"jump_args": ["add", "docs", "~/workspace/docs"]})())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(config.jumps["docs"], "~/workspace/docs")
+        save_mock.assert_called_once_with(config)
+        self.assertIn("Saved jump: docs -> ~/workspace/docs", stdout.getvalue())
+
+    def test_cmd_jump_add_rejects_existing_name(self) -> None:
+        config = MasconConfig(jumps={"docs": "~/workspace/docs"})
+        stderr = io.StringIO()
+        with (
+            patch("mastercontrol.cli.load_config", return_value=config),
+            patch("sys.stderr", stderr),
+        ):
+            code = cmd_jump(type("Args", (), {"jump_args": ["add", "docs", "~/other"]})())
+
+        self.assertEqual(code, 1)
+        self.assertIn("Jump already exists: docs", stderr.getvalue())
+
+    def test_cmd_jump_remove_deletes_existing_jump(self) -> None:
+        config = MasconConfig(jumps={"workspace": "~/workspace", "docs": "~/workspace/docs"})
+        stdout = io.StringIO()
+        with (
+            patch("mastercontrol.cli.load_config", return_value=config),
+            patch("mastercontrol.cli.save_config") as save_mock,
+            redirect_stdout(stdout),
+        ):
+            code = cmd_jump(type("Args", (), {"jump_args": ["remove", "docs"]})())
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("docs", config.jumps)
+        save_mock.assert_called_once_with(config)
+        self.assertIn("Removed jump: docs", stdout.getvalue())
+
+    def test_cmd_jump_remove_errors_for_missing_name(self) -> None:
+        config = MasconConfig(jumps={"workspace": "~/workspace"})
+        stderr = io.StringIO()
+        with (
+            patch("mastercontrol.cli.load_config", return_value=config),
+            patch("sys.stderr", stderr),
+        ):
+            code = cmd_jump(type("Args", (), {"jump_args": ["remove", "docs"]})())
+
+        self.assertEqual(code, 1)
+        self.assertIn("Unknown jump: docs", stderr.getvalue())
+
+    def test_cmd_jump_lookup_still_resolves_existing_name(self) -> None:
+        config = MasconConfig(jumps={"workspace": "~/workspace"})
+        stdout = io.StringIO()
+        with (
+            patch("mastercontrol.cli.load_config", return_value=config),
+            patch("mastercontrol.cli.expand_path", return_value=Path("/tmp/workspace")),
+            redirect_stdout(stdout),
+        ):
+            code = cmd_jump(type("Args", (), {"jump_args": ["workspace"]})())
+
+        self.assertEqual(code, 0)
+        self.assertIn("/tmp/workspace", stdout.getvalue())
+
+
 class StartupIntroTests(unittest.TestCase):
     def test_get_mascon_version_returns_package_version(self) -> None:
         self.assertEqual(get_mascon_version(), __version__)
@@ -324,6 +408,17 @@ class ReplTests(unittest.TestCase):
         self.assertIn("sophia", use_candidates)
         self.assertIn("sophia", chat_candidates)
 
+    def test_repl_completion_suggests_jump_management_and_names(self) -> None:
+        config = MasconConfig(jumps={"workspace": "~/workspace", "docs": "~/workspace/docs"})
+        with patch("mastercontrol.cli.load_config", return_value=config):
+            bare_candidates = repl_completion_candidates("jump ", "", 5, 5)
+            named_candidates = repl_completion_candidates("jump d", "d", 5, 6)
+
+        self.assertIn("list", bare_candidates)
+        self.assertIn("add", bare_candidates)
+        self.assertIn("remove", bare_candidates)
+        self.assertIn("docs", named_candidates)
+
     def test_interactive_loop_dispatches_to_run_cli(self) -> None:
         with (
             patch("mastercontrol.cli.setup_repl_readline"),
@@ -339,6 +434,7 @@ class ReplTests(unittest.TestCase):
         self.assertEqual(repl_expand_bare_command("repo"), ["mascon", "repo", "--help"])
         self.assertEqual(repl_expand_bare_command("aws"), ["mascon", "aws", "--help"])
         self.assertEqual(repl_expand_bare_command("path"), ["mascon", "path", "--help"])
+        self.assertEqual(repl_expand_bare_command("jump"), ["mascon", "jump", "--help"])
         self.assertEqual(repl_expand_bare_command("ai list"), ["mascon", "ai", "list"])
 
 

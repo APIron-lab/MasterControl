@@ -150,6 +150,14 @@ def repl_completion_candidates(line_buffer: str, text: str, begin_idx: int, end_
     if not tokens:
         return [cmd for cmd in repl_top_level_commands() if cmd.startswith(text)]
 
+    if len(tokens) == 1 and tokens[0] == "jump" and expect_new_token:
+        names = []
+        try:
+            names = sorted(load_config().jumps)
+        except Exception:
+            pass
+        return [cmd for cmd in ["list", "add", "remove", *names] if cmd.startswith(text)]
+
     if len(tokens) == 1 and not expect_new_token:
         return [cmd for cmd in repl_top_level_commands() if cmd.startswith(text)]
 
@@ -171,6 +179,15 @@ def repl_completion_candidates(line_buffer: str, text: str, begin_idx: int, end_
         if len(tokens) >= 3 and tokens[-2] in {"-p", "--profile"}:
             return [name for name in repl_profile_names() if name.startswith(text)]
         return [flag for flag in ["-p", "--profile"] if flag.startswith(text)]
+
+    if len(tokens) == 2 and tokens[0] == "jump" and not expect_new_token:
+        reserved = ["list", "add", "remove"]
+        names = []
+        try:
+            names = sorted(load_config().jumps)
+        except Exception:
+            pass
+        return [value for value in [*reserved, *names] if value.startswith(text)]
 
     return []
 
@@ -224,7 +241,7 @@ def repl_expand_bare_command(raw: str) -> list[str]:
         tokens = shlex.split(raw)
     except ValueError:
         return ["mascon", *raw.split()]
-    if len(tokens) == 1 and tokens[0] in {"ai", "repo", "aws", "path"}:
+    if len(tokens) == 1 and tokens[0] in {"ai", "repo", "aws", "path", "jump"}:
         return ["mascon", tokens[0], "--help"]
     return ["mascon", *tokens]
 
@@ -397,7 +414,7 @@ def dashboard_suggested_actions(config: MasconConfig) -> list[str]:
             actions.append("aws configure list-profiles")
 
     if len(config.jumps) <= 1:
-        actions.append(f"edit {CONFIG_FILE} to add more jumps")
+        actions.append("mascon jump add <name> <path>")
     return actions[:3]
 
 
@@ -1052,7 +1069,7 @@ def interactive_loop() -> None:
                 print("Cloud / AWS")
                 print("  aws whoami | aws login | aws summary | aws profile")
                 print("Workspace")
-                print("  repo check | repo dirty | repo scan | jump <name> | open . | path win . | path wsl .")
+                print("  repo check | repo dirty | repo scan | jump <name> | jump list | jump add <name> <path> | jump remove <name> | open . | path win . | path wsl .")
                 print("Tools")
                 print('  codex | codex ask "..."')
                 continue
@@ -1193,13 +1210,83 @@ def cmd_open(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_jump(args: argparse.Namespace) -> int:
+def cmd_jump_lookup(name: str) -> int:
     config = load_config()
-    if args.name not in config.jumps:
-        print(f"Unknown jump: {args.name}", file=sys.stderr)
+    if name not in config.jumps:
+        print(f"Unknown jump: {name}", file=sys.stderr)
         return 1
-    print(str(expand_path(config.jumps[args.name])))
+    print(str(expand_path(config.jumps[name])))
     return 0
+
+
+def cmd_jump_list(_: argparse.Namespace) -> int:
+    config = load_config()
+    if not config.jumps:
+        print("No jumps configured.")
+        return 0
+    for name, path in config.jumps.items():
+        print(f"{name:<12} {path}")
+    return 0
+
+
+def cmd_jump_add(args: argparse.Namespace) -> int:
+    try:
+        config = load_config()
+        if args.name in config.jumps:
+            print(f"Jump already exists: {args.name}", file=sys.stderr)
+            return 1
+        config.jumps[args.name] = args.path
+        save_config(config)
+        print(f"Saved jump: {args.name} -> {args.path}")
+        return 0
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_jump_remove(args: argparse.Namespace) -> int:
+    try:
+        config = load_config()
+        if args.name not in config.jumps:
+            print(f"Unknown jump: {args.name}", file=sys.stderr)
+            return 1
+        del config.jumps[args.name]
+        save_config(config)
+        print(f"Removed jump: {args.name}")
+        return 0
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_jump(args: argparse.Namespace) -> int:
+    reserved = {"list", "add", "remove"}
+    if not args.jump_args:
+        print("usage: mascon jump {list|add|remove|<name>} ...", file=sys.stderr)
+        return 2
+
+    command = args.jump_args[0]
+    if command == "list":
+        return cmd_jump_list(args)
+    if command == "add":
+        if len(args.jump_args) != 3:
+            print("usage: mascon jump add <name> <path>", file=sys.stderr)
+            return 2
+        add_args = argparse.Namespace(name=args.jump_args[1], path=args.jump_args[2])
+        return cmd_jump_add(add_args)
+    if command == "remove":
+        if len(args.jump_args) != 2:
+            print("usage: mascon jump remove <name>", file=sys.stderr)
+            return 2
+        remove_args = argparse.Namespace(name=args.jump_args[1])
+        return cmd_jump_remove(remove_args)
+    if command in reserved:
+        print(f"usage: mascon jump {command}", file=sys.stderr)
+        return 2
+    if len(args.jump_args) != 1:
+        print("usage: mascon jump <name>", file=sys.stderr)
+        return 2
+    return cmd_jump_lookup(command)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1323,8 +1410,14 @@ def build_parser() -> argparse.ArgumentParser:
     open_p.add_argument("target", nargs="?", default=".")
     open_p.set_defaults(func=cmd_open)
 
-    jump_p = sub.add_parser("jump", help="Print named jump target path")
-    jump_p.add_argument("name")
+    jump_p = sub.add_parser(
+        "jump",
+        help="Resolve or manage jump targets",
+        usage="mascon jump {list|add <name> <path>|remove <name>|<name>}",
+        description="Resolve a named jump target or manage configured jumps.",
+    )
+    jump_p.epilog = "Examples: mascon jump workspace | mascon jump list | mascon jump add docs ~/workspace/docs"
+    jump_p.add_argument("jump_args", nargs="*")
     jump_p.set_defaults(func=cmd_jump)
 
     return parser
