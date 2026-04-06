@@ -236,7 +236,7 @@ Manual config is also supported:
 ```bash
 mkdir -p ~/.config/mascon
 cat > ~/.config/mascon/config.toml <<'TOML'
-profile = "apiron"
+profile = "default"
 mode = "work"
 workspace = "~/workspace"
 default_aws_profile = "dev"

@@ -306,7 +306,7 @@ def build_init_config() -> tuple[MasconConfig, Path | None]:
             backup_path = backup_existing_config()
 
     print()
-    profile = prompt_text("Profile", "apiron")
+    profile = prompt_text("Profile", "default")
     mode = prompt_text("Mode", "work")
     workspace = maybe_create_workspace(prompt_text("Workspace", "~/workspace"))
 
@@ -322,8 +322,9 @@ def build_init_config() -> tuple[MasconConfig, Path | None]:
     jumps: dict[str, str] = {"workspace": workspace}
     for name, suggested in {
         "mastercontrol": "~/workspace/mastercontrol",
-        "sophia": "~/workspace/sophia-core",
-        "vault": "~/workspace/virtual-vault",
+        "projects": "~/workspace/projects",
+        "docs": "~/workspace/docs",
+        "tools": "~/workspace/tools",
     }.items():
         value = prompt_optional_jump(name, suggested)
         if value:

@@ -20,7 +20,7 @@ class AiConfigTests(unittest.TestCase):
             config_path.write_text(
                 "\n".join(
                     [
-                        'profile = "apiron"',
+                        'profile = "default"',
                         'mode = "work"',
                         'workspace = "~/workspace"',
                         'default_aws_profile = "dev"',

@@ -9,7 +9,7 @@ from mastercontrol.services import AwsStatus, CommandResult, aws_check_status
 class BuildConfigTomlTests(unittest.TestCase):
     def test_build_config_toml_renders_expected_fields(self) -> None:
         config = MasconConfig(
-            profile="apiron",
+            profile="default",
             mode="work",
             workspace="~/workspace",
             default_aws_profile="dev",
@@ -21,7 +21,7 @@ class BuildConfigTomlTests(unittest.TestCase):
 
         rendered = build_config_toml(config)
 
-        self.assertIn('profile = "apiron"', rendered)
+        self.assertIn('profile = "default"', rendered)
         self.assertIn('mode = "work"', rendered)
         self.assertIn('workspace = "~/workspace"', rendered)
         self.assertIn('default_aws_profile = "dev"', rendered)
